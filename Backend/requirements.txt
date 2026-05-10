@@ -1,0 +1,10 @@
+python-dotenv
+huggingface_hub
+pydantic
+qdrant-client 
+fastembed
+langchain_text_splitters
+fastapi
+uvicorn
+pdfplumber
+python-multipart
