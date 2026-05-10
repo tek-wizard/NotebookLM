@@ -1,7 +1,6 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 const promptSuggestions = [
   "Give me a crisp summary of this resource.",
@@ -28,7 +27,7 @@ function buildWelcomeMessage(resourceLabel) {
   return buildMessage(
     "assistant",
     resourceLabel
-      ? `Your resource "${resourceLabel}" is indexed. Ask anything about it and I will stay grounded in that material.`
+      ? `Your resource "${resourceLabel}" is indexed. Ask anything about it and I will answer from that material.`
       : "Drop a PDF or TXT file, or paste raw text to create a grounded chat session.",
   );
 }
@@ -368,23 +367,6 @@ function App() {
             </span>
           </div>
 
-          <section className="resource-hero">
-            <div className="hero-topline">
-              <div className="brand-lockup">
-                <span className="brand-chip">Notebook</span>
-                <h1>Grounded chat dock</h1>
-              </div>
-              <span className="hero-badge">PDF + TXT</span>
-            </div>
-            <p>
-              Lock context here. Let the thread do the scrolling.
-            </p>
-            <div className="hero-tags">
-              <span className="hero-tag">Fixed control rail</span>
-              <span className="hero-tag">Source-aware answers</span>
-            </div>
-          </section>
-
           <section className="glass-card upload-card">
             <div className="section-heading">
               <div>
@@ -424,15 +406,7 @@ function App() {
             {uploadMode === "file" ? (
               <div className="upload-pane file-pane">
                 <div className="action-row">
-                  <p>Drag in a PDF or TXT file, or browse manually.</p>
-                  <button
-                    type="button"
-                    className="ghost-button slim"
-                    onClick={openFilePicker}
-                    disabled={uploadBusy}
-                  >
-                    Browse
-                  </button>
+                  <p>Drag in a PDF or TXT file, or pick one manually.</p>
                 </div>
 
                 <button
@@ -448,12 +422,22 @@ function App() {
                   <span>Click to pick from your device</span>
                 </button>
 
-                <div className="file-meta compact">
+                <div className="file-meta compact elevated">
                   <div>
                     <span className="file-meta-label">Selected file</span>
                     <strong>{selectedFile?.name || "Nothing selected yet"}</strong>
                   </div>
-                  <span>{selectedFile ? formatFileSize(selectedFile.size) : ""}</span>
+                  <div className="file-meta-actions">
+                    <span>{selectedFile ? formatFileSize(selectedFile.size) : ""}</span>
+                    <button
+                      type="button"
+                      className="ghost-button slim"
+                      onClick={openFilePicker}
+                      disabled={uploadBusy}
+                    >
+                      Browse
+                    </button>
+                  </div>
                 </div>
 
                 <button
@@ -462,7 +446,7 @@ function App() {
                   onClick={uploadFile}
                   disabled={!selectedFile || uploadBusy}
                 >
-                  {isUploadingFile ? "Indexing file..." : "Index file"}
+                  {isUploadingFile ? "Uploading file..." : "Upload file"}
                 </button>
               </div>
             ) : (
@@ -488,7 +472,7 @@ function App() {
                   onClick={uploadText}
                   disabled={!textResource.trim() || uploadBusy}
                 >
-                  {isUploadingText ? "Indexing text..." : "Index text"}
+                  {isUploadingText ? "Uploading text..." : "Upload text"}
                 </button>
               </div>
             )}
