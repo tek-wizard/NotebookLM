@@ -1,6 +1,11 @@
-# NotebookLM RAG Clone
+# NotebookLM Advanced RAG Clone
 
-A simple Google NotebookLM-style RAG application where users can upload a PDF or plain text file and chat with the content through a grounded interface.
+A Google NotebookLM-style RAG application where users can upload a PDF or plain text file and chat with the content through a grounded interface.
+
+It runs an **Advanced RAG (RAG 2)** pipeline: query rewriting, sub-query
+decomposition, HyDE, hybrid retrieval, cross-encoder re-ranking, Corrective RAG,
+and an LLM judge. See **[ADVANCED_RAG.md](./ADVANCED_RAG.md)** for the full
+technique-by-technique breakdown and how each maps to the code.
 
 ## Live Links
 
@@ -15,14 +20,29 @@ A simple Google NotebookLM-style RAG application where users can upload a PDF or
 - Retrieves relevant chunks for each question
 - Uses an LLM to generate answers grounded in the uploaded document
 
-## RAG Pipeline
+## RAG Pipeline (Advanced / RAG 2)
+
+**Ingestion & indexing**
 
 1. Ingestion: PDF/TXT upload or raw text input
-2. Chunking: `RecursiveCharacterTextSplitter`
+2. Chunking: `RecursiveCharacterTextSplitter` (size 500 / overlap 50)
 3. Embedding: `sentence-transformers/all-MiniLM-L6-v2`
 4. Storage: Qdrant vector database
-5. Retrieval: vector search with lexical fallback for better grounding
-6. Generation: Hugging Face inference client with context-aware prompting
+
+**Advanced retrieval & generation** (per question)
+
+5. **Query rewriting (SLM)** — rewrite the chat turn into a clean standalone query
+6. **Sub-query enhancement** — split complex questions into sub-queries
+7. **HyDE** — draft a hypothetical answer and embed *that* for retrieval
+8. **Hybrid retrieval** — dense vector search merged with lexical keyword search
+9. **Cross-encoder re-ranking** — retrieve a wide pool, rerank down to the best chunks
+10. **Corrective RAG** — grade the context; broaden or refuse if it is weak
+11. **Generation** — Hugging Face inference client with context-aware prompting
+12. **LLM judge** — verify the answer is grounded; refuse if it hallucinated
+
+Each stage is independently toggleable (see *Tuning* below) — that is the
+speed-vs-accuracy dial. The `/sessions/query` response also returns a `trace`
+showing which stages ran.
 
 ## Chunking Strategy
 
@@ -40,6 +60,7 @@ This keeps chunks compact while preserving enough local context for retrieval.
 - Backend: FastAPI
 - Vector DB: Qdrant
 - Embeddings: FastEmbed / MiniLM
+- Re-ranker: FastEmbed cross-encoder (`ms-marco-MiniLM`)
 - LLM: Hugging Face Inference API
 
 ## Local Setup
@@ -71,10 +92,34 @@ For deployed frontend builds, set:
 
 - `VITE_API_BASE_URL=https://grounded-llm.vercel.app/api`
 
+## Tuning the Advanced RAG pipeline
+
+Every advanced stage can be switched on/off independently via environment
+variables — this is the practical speed-vs-accuracy dial. All default to `on`.
+
+| Env var | Stage | Default |
+|---|---|---|
+| `ENABLE_QUERY_REWRITE` | Query rewriting (SLM) | `true` |
+| `ENABLE_SUBQUERY` | Sub-query enhancement | `true` |
+| `ENABLE_HYDE` | HyDE | `true` |
+| `ENABLE_RERANK` | Cross-encoder re-ranking | `true` |
+| `ENABLE_CORRECTIVE_RAG` | Corrective RAG grading | `true` |
+| `ENABLE_LLM_JUDGE` | LLM judge | `true` |
+| `RAG_CANDIDATE_POOL` | candidates fetched before rerank | `12` |
+| `RAG_FINAL_CONTEXT_K` | chunks sent to the generator | `4` |
+| `RAG_RERANK_MODEL` | cross-encoder model | `Xenova/ms-marco-MiniLM-L-6-v2` |
+
+Set them all to `false` to get the original basic (RAG 1) behaviour.
+
 ## Project Structure
 
 ```text
-Backend/   FastAPI API, ingestion, retrieval, generation
+Backend/
+  app/services/config.py        Advanced RAG stage toggles & sizing
+  app/services/advanced_rag.py  Sub-query, HyDE, Corrective RAG, LLM judge
+  app/services/vectorDB.py      Chunking, hybrid retrieval, cross-encoder rerank
+  app/services/LLM.py           Query rewrite + orchestration + generation
+  app/services/prompts.py       System prompts for every stage
 frontend/  React chat UI
 ```
 

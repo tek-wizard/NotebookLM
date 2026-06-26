@@ -10,6 +10,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 
 from app.services.messagesData import delete_session_id_from_map
+from app.services import config
 
 load_dotenv()
 
@@ -31,6 +32,56 @@ splitter = RecursiveCharacterTextSplitter(
     chunk_overlap=50,
     separators=["\n\n", "\n", ". ", " "],
 )
+
+
+# ---------------------------------------------------------------------------
+# Cross-encoder re-ranker (RAG-2: "Re-ranking strategies (cross-encoders)")
+#
+# Bi-encoder vector search (MiniLM) is fast but approximate: it embeds query
+# and chunk separately, so it can rank a loosely-related chunk above the truly
+# relevant one. A cross-encoder reads the (query, chunk) PAIR together and
+# scores true relevance -- much more accurate, but too slow to run over the
+# whole collection. So we "retrieve wide, rerank narrow": vector+lexical search
+# fetches a wide candidate pool, then the cross-encoder reorders just those.
+#
+# Loaded lazily and wrapped in try/except: if the model can't download (e.g.
+# cold serverless start), retrieval still works, just without reranking.
+# ---------------------------------------------------------------------------
+_reranker = None
+_reranker_failed = False
+
+
+def _get_reranker():
+    global _reranker, _reranker_failed
+    if _reranker is not None or _reranker_failed:
+        return _reranker
+    try:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+        _reranker = TextCrossEncoder(model_name=config.RERANK_MODEL)
+    except Exception:
+        _reranker_failed = True
+        _reranker = None
+    return _reranker
+
+
+def rerank_chunks(query_text: str, chunks: list[str], limit: int) -> list[str]:
+    """Reorder ``chunks`` by cross-encoder relevance to ``query_text`` and
+    keep the top ``limit``. Falls back to the original order on any failure."""
+    candidates = deduplicate_chunks(chunks)
+    if not candidates or not config.ENABLE_RERANK:
+        return candidates[:limit]
+
+    reranker = _get_reranker()
+    if reranker is None:
+        return candidates[:limit]
+
+    try:
+        scores = list(reranker.rerank(query_text, candidates))
+        ranked = sorted(zip(scores, candidates), key=lambda pair: pair[0], reverse=True)
+        return [chunk for _, chunk in ranked[:limit]]
+    except Exception:
+        return candidates[:limit]
 
 
 def normalize_text(value: str) -> str:
@@ -154,6 +205,52 @@ async def get_information(
         merged_chunks = chunks[:limit]
 
     return build_context_from_chunks(merged_chunks, limit=limit)
+
+
+def _vector_search(session_id: str, query_text: str, limit: int) -> list[str]:
+    try:
+        search_result = client.query(
+            collection_name=session_id,
+            query_text=query_text,
+            limit=limit,
+        )
+        return [hit.document for hit in search_result if hit.document]
+    except Exception:
+        return []
+
+
+async def retrieve_candidates(
+    session_id: str,
+    query_texts: list[str],
+    pool_size: int | None = None,
+) -> list[str]:
+    """Build a wide candidate pool for one or more query texts.
+
+    This is the retrieval half of the advanced pipeline. For each query (the
+    original query plus any sub-queries / HyDE passages) we run hybrid search:
+    dense vector search (semantic) merged with lexical keyword ranking
+    (exact terms). Merging both is a simple **hybrid retrieval** that catches
+    matches either method alone would miss. The pooled, de-duplicated result is
+    later compressed by the cross-encoder re-ranker.
+    """
+    chunks = session_chunks_map.get(session_id, [])
+    if not chunks:
+        return []
+
+    pool_size = pool_size or config.CANDIDATE_POOL
+    per_query = max(4, pool_size // max(1, len(query_texts)))
+
+    collected: list[str] = []
+    for query_text in query_texts:
+        if not query_text:
+            continue
+        collected.extend(_vector_search(session_id, query_text, per_query))
+        collected.extend(rank_chunks_by_keywords(chunks, query_text, limit=per_query))
+
+    candidates = deduplicate_chunks(collected)
+    if not candidates:
+        candidates = chunks[:pool_size]
+    return candidates[:pool_size]
 
 
 async def delete_session_id(session_id: str) -> None:

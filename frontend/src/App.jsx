@@ -14,11 +14,24 @@ const timeFormatter = new Intl.DateTimeFormat([], {
   minute: "2-digit",
 });
 
-function buildMessage(role, content) {
+// Friendly labels for the Advanced RAG stages reported in the query `trace`.
+const STAGE_LABELS = {
+  query_rewrite: "Query rewrite",
+  subquery: "Sub-queries",
+  hyde: "HyDE",
+  rerank: "Re-rank",
+  corrective_rag: "Corrective RAG",
+  llm_judge: "LLM judge",
+  full_context: "Full context",
+  small_talk: "Small talk",
+};
+
+function buildMessage(role, content, trace = null) {
   return {
     id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role,
     content,
+    trace,
     timestamp: Date.now(),
   };
 }
@@ -97,6 +110,27 @@ async function destroySession(sessionId) {
   }
 }
 
+function PipelineTrace({ trace }) {
+  // De-duplicate the ordered stage list while keeping first-seen order.
+  const stages = [...new Set(trace?.stages ?? [])].filter(
+    (stage) => STAGE_LABELS[stage],
+  );
+
+  if (stages.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="pipeline-trace" aria-label="Advanced RAG pipeline stages">
+      {stages.map((stage) => (
+        <span key={stage} className="pipeline-chip">
+          {STAGE_LABELS[stage]}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function MessageBubble({ message }) {
   const isUser = message.role === "user";
 
@@ -104,6 +138,7 @@ function MessageBubble({ message }) {
     <div className={`message-row ${isUser ? "user" : "assistant"}`}>
       <article className={`message-bubble ${isUser ? "user" : "assistant"}`}>
         <p>{message.content}</p>
+        {!isUser && message.trace ? <PipelineTrace trace={message.trace} /> : null}
         <span>{formatTime(message.timestamp)}</span>
       </article>
     </div>
@@ -295,7 +330,11 @@ function App() {
 
       setMessages((currentMessages) => [
         ...currentMessages,
-        buildMessage("assistant", payload.response || "I could not find an answer."),
+        buildMessage(
+          "assistant",
+          payload.response || "I could not find an answer.",
+          payload.trace ?? null,
+        ),
       ]);
     } catch (error) {
       setChatError(error.message);

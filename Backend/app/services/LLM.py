@@ -5,9 +5,10 @@ from dotenv import load_dotenv
 from huggingface_hub import AsyncInferenceClient
 
 from app.models.llm import Search
+from app.services import config
+from app.services.advanced_rag import judge_answer, retrieve_with_pipeline
 from app.services.messagesData import get_messages
 from app.services.prompts import llm_system_prompt, search_system_prompt
-from app.services.vectorDB import get_information
 
 load_dotenv()
 
@@ -114,6 +115,11 @@ def build_action_items_response(retrieved_context: str) -> str | None:
 
 
 async def build_retrieval_query(query: str, conversation_history: str) -> str:
+    # Query Translation / rewriting using a small model (RAG-2). Resolves
+    # pronouns and history into a clean, standalone, keyword-rich search query.
+    if not config.ENABLE_QUERY_REWRITE:
+        return query
+
     response_format = {
         "type": "json_schema",
         "json_schema": {
@@ -160,25 +166,36 @@ def build_user_prompt(
     )
 
 
-async def handle_user_query(query: str, session_id: str) -> str:
+async def handle_user_query(query: str, session_id: str) -> dict:
+    """Run the Advanced RAG pipeline for one user turn.
+
+    Returns ``{"answer": str, "trace": dict}``. ``trace`` records which
+    advanced-RAG stages ran (query rewrite, sub-query, HyDE, rerank, corrective
+    RAG, judge) so the pipeline is observable from the client.
+    """
     conversation_messages = get_messages(session_id)
     conversation_history = format_conversation_history(conversation_messages)
 
+    trace: dict = {"stages": []}
     retrieved_information = ""
+
     if not is_small_talk(query):
+        # Stage 1 -- Query Translation / rewriting (SLM).
         retrieval_query = await build_retrieval_query(query, conversation_history)
-        retrieved_information = await get_information(
+        if retrieval_query != query:
+            trace["stages"].append("query_rewrite")
+        trace["rewritten_query"] = retrieval_query
+
+        # Stages 2-6 -- sub-query, HyDE, hybrid retrieval, rerank, corrective RAG.
+        retrieved_information, retrieval_trace = await retrieve_with_pipeline(
             session_id=session_id,
-            query_text=retrieval_query,
+            retrieval_query=retrieval_query,
             include_all=should_use_full_context(query),
         )
-
-        if not retrieved_information and retrieval_query != query:
-            retrieved_information = await get_information(
-                session_id=session_id,
-                query_text=query,
-                include_all=should_use_full_context(query),
-            )
+        trace["stages"].extend(retrieval_trace.get("stages", []))
+        trace["retrieval"] = retrieval_trace
+    else:
+        trace["stages"].append("small_talk")
 
     if is_action_item_query(query):
         action_items_response = build_action_items_response(retrieved_information)
@@ -187,7 +204,7 @@ async def handle_user_query(query: str, session_id: str) -> str:
             conversation_messages.append(
                 {"role": "assistant", "content": action_items_response}
             )
-            return action_items_response
+            return {"answer": action_items_response, "trace": trace}
 
     user_prompt = build_user_prompt(query, conversation_history, retrieved_information)
     response = await client.chat_completion(
@@ -199,10 +216,21 @@ async def handle_user_query(query: str, session_id: str) -> str:
     )
 
     answer = response.choices[0].message.content or OUT_OF_CONTEXT_RESPONSE
+
+    # Stage 7 -- LLM judge: verify the answer is grounded in the context.
+    # If it hallucinated facts not in the context, refuse instead of misleading.
+    if retrieved_information and not is_small_talk(query):
+        judgement = await judge_answer(retrieved_information, answer)
+        trace["grounded"] = judgement.grounded
+        if config.ENABLE_LLM_JUDGE:
+            trace["stages"].append("llm_judge")
+        if not judgement.grounded:
+            answer = OUT_OF_CONTEXT_RESPONSE
+
     conversation_messages.append({"role": "user", "content": query})
     conversation_messages.append({"role": "assistant", "content": answer})
 
-    return answer
+    return {"answer": answer, "trace": trace}
 
 
 handel_user_query = handle_user_query

@@ -1013,3 +1013,24 @@ button {
     white-space: nowrap;
   }
 }
+
+/* Advanced RAG pipeline trace chips shown under assistant answers. */
+.pipeline-trace {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.pipeline-chip {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  border: 1px solid rgba(31, 36, 45, 0.06);
+}

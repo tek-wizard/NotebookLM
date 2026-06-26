@@ -53,8 +53,10 @@ async def upload_text_data(
 
 @router.post("/query")
 async def query_session(request: QueryRequest):
-    response_text = await handle_user_query(request.query, request.session_id)
-    return {"response": response_text}
+    result = await handle_user_query(request.query, request.session_id)
+    # `trace` exposes which Advanced RAG stages ran (query rewrite, sub-query,
+    # HyDE, rerank, corrective RAG, LLM judge) so the client can show them.
+    return {"response": result["answer"], "trace": result["trace"]}
 
 
 @router.delete("/{session_id}")
